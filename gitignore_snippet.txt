@@ -1,0 +1,8 @@
+# agent hub runtime files (job board)
+docs/agent_hub/JOB.json
+docs/agent_hub/.job_state.json
+docs/agent_hub/BOARD.md
+docs/agent_hub/.dispatcher.lock
+docs/agent_hub/logs/dispatcher.jsonl
+docs/agent_hub/logs/dispatcher_runs/
+docs/agent_hub/.job_fixture/

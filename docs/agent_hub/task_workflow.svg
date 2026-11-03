@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="540" viewBox="0 0 680 540" role="img">
+<title>Life of a hub task</title>
+<desc>You give a task to one agent. That owner opens a task file naming the owner, reviewers and acceptance check, does the work, then submits it. One or two reviewer agents recompute the results from raw data. A blocking finding sends the work back to the owner to fix and resubmit. When every required reviewer accepts the current version, the task is accepted. You approve GPU runs, decide questions and disputes, and push to GitHub.</desc>
+<style>
+text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+.th { font-size: 14px; font-weight: 500; }
+.ts { font-size: 12px; }
+.you rect { fill: #FAECE7; stroke: #993C1D; }
+.you .th { fill: #712B13; } .you .ts { fill: #993C1D; }
+.agent rect { fill: #E1F5EE; stroke: #0F6E56; }
+.agent .th { fill: #085041; } .agent .ts { fill: #0F6E56; }
+.done rect { fill: #F1EFE8; stroke: #888780; }
+.done .th { fill: #2C2C2A; } .done .ts { fill: #5F5E5A; }
+.note { fill: #5F5E5A; }
+.arr { stroke: #73726C; stroke-width: 1.5; fill: none; }
+.leader { stroke: #888780; stroke-width: 0.5; stroke-dasharray: 3 3; fill: none; }
+@media (prefers-color-scheme: dark) {
+  .you rect { fill: #712B13; stroke: #F0997B; }
+  .you .th { fill: #F5C4B3; } .you .ts { fill: #F0997B; }
+  .agent rect { fill: #085041; stroke: #5DCAA5; }
+  .agent .th { fill: #9FE1CB; } .agent .ts { fill: #5DCAA5; }
+  .done rect { fill: #444441; stroke: #B4B2A9; }
+  .done .th { fill: #D3D1C7; } .done .ts { fill: #B4B2A9; }
+  .note { fill: #B4B2A9; }
+  .arr { stroke: #9C9A92; }
+  .leader { stroke: #B4B2A9; }
+}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g class="you">
+<rect x="170" y="30" width="290" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="315" y="49" text-anchor="middle" dominant-baseline="central">You give the task</text>
+<text class="ts" x="315" y="68" text-anchor="middle" dominant-baseline="central">To one agent, in one chat</text>
+</g>
+<line x1="315" y1="86" x2="315" y2="118" class="arr" marker-end="url(#arrow)"/>
+<g class="agent">
+<rect x="170" y="120" width="290" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="315" y="139" text-anchor="middle" dominant-baseline="central">Owner opens a task file</text>
+<text class="ts" x="315" y="158" text-anchor="middle" dominant-baseline="central">Owner, reviewers, acceptance check</text>
+</g>
+<line x1="315" y1="176" x2="315" y2="208" class="arr" marker-end="url(#arrow)"/>
+<g class="agent">
+<rect x="170" y="210" width="290" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="315" y="229" text-anchor="middle" dominant-baseline="central">Owner does the work</text>
+<text class="ts" x="315" y="248" text-anchor="middle" dominant-baseline="central">Commits own files, then submits</text>
+</g>
+<line x1="290" y1="266" x2="245" y2="298" class="arr" marker-end="url(#arrow)"/>
+<line x1="340" y1="266" x2="388" y2="298" class="arr" marker-end="url(#arrow)"/>
+<g class="agent">
+<rect x="170" y="300" width="135" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="237" y="319" text-anchor="middle" dominant-baseline="central">Reviewer A</text>
+<text class="ts" x="237" y="338" text-anchor="middle" dominant-baseline="central">Recomputes data</text>
+</g>
+<g class="agent">
+<rect x="325" y="300" width="135" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="392" y="319" text-anchor="middle" dominant-baseline="central">Reviewer B</text>
+<text class="ts" x="392" y="338" text-anchor="middle" dominant-baseline="central">If two required</text>
+</g>
+<path d="M170 328 L130 328 L130 238 L168 238" class="arr" marker-end="url(#arrow)"/>
+<text class="ts note" x="70" y="276" text-anchor="middle" dominant-baseline="central">Findings:</text>
+<text class="ts note" x="70" y="293" text-anchor="middle" dominant-baseline="central">fix, resubmit</text>
+<line x1="245" y1="356" x2="290" y2="398" class="arr" marker-end="url(#arrow)"/>
+<line x1="388" y1="356" x2="340" y2="398" class="arr" marker-end="url(#arrow)"/>
+<g class="done">
+<rect x="170" y="400" width="290" height="56" rx="8" stroke-width="0.5"/>
+<text class="th" x="315" y="419" text-anchor="middle" dominant-baseline="central">Accepted</text>
+<text class="ts" x="315" y="438" text-anchor="middle" dominant-baseline="central">Every reviewer, this exact version</text>
+</g>
+<line class="leader" x1="485" y1="238" x2="462" y2="238"/>
+<g class="you">
+<rect x="485" y="216" width="155" height="44" rx="8" stroke-width="0.5"/>
+<text class="th" x="562" y="238" text-anchor="middle" dominant-baseline="central">Approve GPU runs</text>
+</g>
+<line class="leader" x1="485" y1="328" x2="462" y2="328"/>
+<g class="you">
+<rect x="485" y="306" width="155" height="44" rx="8" stroke-width="0.5"/>
+<text class="th" x="562" y="328" text-anchor="middle" dominant-baseline="central">Decide questions</text>
+</g>
+<line class="leader" x1="485" y1="428" x2="462" y2="428"/>
+<g class="you">
+<rect x="485" y="406" width="155" height="44" rx="8" stroke-width="0.5"/>
+<text class="th" x="562" y="428" text-anchor="middle" dominant-baseline="central">Push to GitHub</text>
+</g>
+<g class="you"><rect x="170" y="488" width="14" height="14" rx="3" stroke-width="0.5"/></g>
+<text class="ts note" x="192" y="495" dominant-baseline="central">Your steps</text>
+<g class="agent"><rect x="290" y="488" width="14" height="14" rx="3" stroke-width="0.5"/></g>
+<text class="ts note" x="312" y="495" dominant-baseline="central">Agent steps</text>
+</svg>

@@ -9,7 +9,7 @@ Only decisions the user actually stated go here. Agent recommendations, proposal
 <!--
 When you tell an agent "job check OK" or "job check NOT OK" for a task, `job.py check` appends a block like this one. D### numbers count up from D001.
 
-### D001 · <time> · recorded by [tag] · heard in [tag]'s chat
+### D### · <time> · recorded by [tag] · heard in [tag]'s chat
 - event time: unknown
 - quote: "<the user's exact words>"
 - scope: task=T###; check=ok

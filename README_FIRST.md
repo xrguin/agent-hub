@@ -15,7 +15,7 @@ python3 setup_hub.py /path/to/your/repo --dry-run    # shows every change, chang
 python3 setup_hub.py /path/to/your/repo              # installs, asking before each step
 ```
 
-The wizard finds your tools (on `PATH` or in the usual install places), checks your logins, writes `hub_config.json` with bare command names, keeps this machine's full paths in the git-ignored `hub_config.local.json`, copies the hub, updates `.gitignore`, `CLAUDE.md` and `AGENTS.md`, commits (never pushes), installs the commit guard, runs the self-test and prints the kickoff prompts. It ends with a checklist (`✓` done, `✗` needs a fix, `–` not applicable). It never asks for or stores a password or API key; when a command fails, its message is shown with emails and key-like strings masked (a best effort). It writes only inside your repository and refuses to start if `docs`, `.gitignore`, `CLAUDE.md` or `AGENTS.md` is a symbolic link. If `.gitignore` has uncommitted changes of yours, the hub commit leaves `.gitignore` out for you to commit. Options: `--yes` (answer yes everywhere), `--no-tests`, `--hello` (wake each agent once; spends a few tokens), `--tool-path TOOL=/full/path` (for a tool the search misses), `--local-paths` (record this machine's paths in a clone that already has the hub), `--fix-deepseek` (run on its own; enables the stored DeepSeek credentials for headless runs; edits one dsh file, with a `.bak` copy; without `--yes` outside a terminal it only prints the planned change).
+The wizard finds your tools (on `PATH` or in the usual install places), checks your logins, writes `hub_config.json` with bare command names, keeps this machine's full paths in the git-ignored `hub_config.local.json`, copies the hub, updates `.gitignore`, `CLAUDE.md` and `AGENTS.md`, commits (never pushes), installs the commit guard, runs the self-test and prints the kickoff prompts. It ends with a checklist (`✓` done, `✗` needs a fix, `–` not applicable). It never asks for or stores a password or API key; when a command fails, its message is shown with emails and key-like strings masked (a best effort). It writes only inside your repository and refuses to start if `docs`, `.gitignore`, `CLAUDE.md` or `AGENTS.md` is a symbolic link. If `.gitignore` has uncommitted changes of yours, the hub commit leaves `.gitignore` out for you to commit. Options: `--yes` (answer yes everywhere), `--no-tests`, `--hello` (wake each agent once; spends a few tokens), `--tool-path TOOL=/full/path` (for a tool the search misses), `--local-paths` (record this machine's paths in a clone that already has the hub), `--hub-branch NAME` (for a public repository, section 8), `--fix-deepseek` (run on its own; enables the stored DeepSeek credentials for headless runs; edits one dsh file, with a `.bak` copy; without `--yes` outside a terminal it only prints the planned change).
 
 **With an agent:** start Claude Code, Codex or `dsh` in your repository and paste the prompt in `SETUP_WITH_AGENT.md`. The agent runs the wizard for you (first `--dry-run`, then `--yes` after you agree), looks for any tool the wizard missed and explains each result.
 
@@ -79,3 +79,30 @@ For a task under "For the user to check", you say OK or not OK. The agent then r
 - The secret check catches mistakes, not everything. It knows common key formats only, `--no-verify` skips it, and it does not read old history. On a public repository, also turn on GitHub push protection.
 - The job board is in trial. Expect rough edges, and read a dispatcher run in `logs/dispatcher_runs/` when a wake does not do what you expect.
 - Limits per job: 10 tasks posted, 6 wakes per agent per hour, 40 wakes, 30 minutes per wake. When a job reaches a limit, its wakes pause until you resume it with `job.py resume --job <id>`. The token limit is not enforced yet.
+
+## 8. Public repositories
+
+The hub commits its logs, reviews, task cards and your exact words to `task_branch`. On a public repository, pushing that branch publishes them. To keep them off GitHub, install on a separate branch:
+
+```
+python3 setup_hub.py /path/to/your/repo --hub-branch hub
+```
+
+The wizard creates the branch, commits the hub there, sets `task_branch` to it and installs a `pre-push` hook that refuses any push carrying `docs/agent_hub`. Your default branch keeps no hub files. `--doctor` warns when a public repository has no push block.
+
+**To publish**, make a second folder once, then repeat the other steps. It stays on your default branch, here `main`, so you never switch branches in the hub folder, where the dispatcher reads its files.
+
+1. Once, in the hub folder: `git worktree add ../<repo>-publish main`
+2. In the publish folder: `git restore --source=hub --staged --worktree -- <the finished product files>`
+3. Commit and push there.
+4. In the hub folder: `git merge main`
+
+**If the hub is already on your default branch**, move it. Do this while no job is running, and stop before step 4 if a step fails.
+
+1. Post a task that owns the config: `python3 docs/agent_hub/tools/new_task.py <tag> "Move hub work to the hub branch" --job none --category hub --owner <tag> --reviewers <another tag> --deliverables docs/agent_hub/hub_config.json`
+2. Record your decision: `python3 docs/agent_hub/tools/job.py set-config <task> --key task_branch --value '"hub"' --quote "<your exact words>" --by <tag>`
+3. Claim the task, change `task_branch` to `hub` in `hub_config.json`, and submit it (`job_act.py`).
+4. `git switch -c hub`, then `git branch -f main origin/main`
+5. `python3 docs/agent_hub/tools/install_hooks.py --push-block --tag <tag> --task T000`
+
+**Limits:** `git push --no-verify` skips the hook. The hook lives in one clone, so a new clone needs it again. The hub branch exists only on your machine, so it has no backup unless you add a private remote, and the hook refuses that too until you change it.

@@ -2,10 +2,43 @@
 """Explicit local installation; existing hook configurations are preserved.
 
 The hook goes into the common git directory (all linked worktrees) and runs the main
-checkout's commit_msg_hook.py."""
+checkout's commit_msg_hook.py.  `--push-block` installs a pre-push hook instead, for a public
+repository: it refuses any push that carries docs/agent_hub."""
 import os
 from pathlib import Path
 import hubtx
+
+PUSH_BLOCK = """#!/bin/sh
+# Keeps hub work off every remote: refuses any push that carries docs/agent_hub.
+zero=0000000000000000000000000000000000000000
+while read -r lref lsha rref rsha; do
+  [ "$lsha" = "$zero" ] && continue
+  if [ "$rsha" = "$zero" ]; then range="$lsha --not --remotes=$1"; else range="$rsha..$lsha"; fi
+  if [ -n "$(git log --format=%h $range -- docs/agent_hub | head -1)" ]; then
+    echo "Push refused: these commits carry docs/agent_hub, which stays off this remote." >&2
+    echo "Publish from a branch without hub commits. Nothing was pushed." >&2
+    exit 1
+  fi
+done
+"""
+
+
+def install_push_block(tag="gpt", task="T012"):
+    with hubtx.transaction(tag, task) as tx:
+        configured = hubtx.git(tx.root, "config", "--get", "core.hooksPath", check=False)
+        if configured.returncode == 0:
+            raise hubtx.BadInput("core.hooksPath is set; preserve it and add the pre-push check to that hook setup yourself")
+        common = (tx.root/hubtx.git(tx.root,"rev-parse","--git-common-dir").stdout.decode().strip()).resolve()
+        directory = common / "hooks"
+        hook = directory/"pre-push"
+        if os.path.lexists(hook):
+            raise hubtx.BadInput("pre-push already exists; preserve it and add the check after review")
+        directory.mkdir(exist_ok=True)
+        fd = os.open(hook, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o755)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(PUSH_BLOCK)
+            os.fchmod(f.fileno(),0o755)
+        return hook
 
 
 def install(tag="gpt", task="T012"):
@@ -40,8 +73,9 @@ def main():
         parser = hubtx.ArgumentParser(description=__doc__)
         parser.add_argument("--tag", default="gpt")
         parser.add_argument("--task", default="T012")
+        parser.add_argument("--push-block", action="store_true", help="install the pre-push hook for a public repository")
         args = parser.parse_args()
-        print(install(args.tag,args.task))
+        print((install_push_block if args.push_block else install)(args.tag,args.task))
     return hubtx.cli(run)
 
 

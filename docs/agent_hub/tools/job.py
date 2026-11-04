@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Job switch for the job board: start, end, resume, status, check, migrate.
+"""Job switch for the job board: start, end, resume, status, check, set-config, migrate.
 
 Writes docs/agent_hub/JOB.json atomically while holding the hub lock.  Every
 call records the user's words (--quote) and who heard them (--by).  `end` and the
@@ -17,6 +17,10 @@ the legacy single-job JOB.json and .job_state.json in the multi-job form.
 user's words), and for --not-ok also a `user action=open` event that reopens the task.
 It refuses inside a dispatcher wake (the environment variable JOB_TAG is set): the user's words
 are recorded only by an agent in the user's own chat.
+
+`set-config <task> --key KEY --value JSON --quote TEXT --by TAG` records the user's decision to change
+hub_config.json: one D### block and a `user action=set_config` event on the task.  The commit guard
+then lets an agent commit exactly that value.  The same rule applies: only in the user's own chat.
 """
 from __future__ import annotations
 
@@ -24,7 +28,6 @@ import argparse
 import contextlib
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -162,8 +165,7 @@ def _check_in_transaction(tx, repo, task, ok, quote):
         raise Refused(f"{shown} is {mine['state']}; --not-ok needs a task in review or accepted")
     path = hub_state.HUB + "DECISIONS.md"
     current = (hubtx._blob(tx.root, path) or b"").decode("utf-8", errors="replace")
-    numbers = [int(n) for n in re.findall(r"^###\s+D(\d{3,})\b", current, re.M)]
-    decision = "D%03d" % (max(numbers, default=0) + 1)
+    decision = events.next_decision(current)
     word = "ok" if ok else "not_ok"
     block = "\n".join([
         "",
@@ -219,6 +221,76 @@ def cmd_check(repo, a) -> int:
     _render(repo)
     shown = ja.display_name(repo, task)
     print(f"recorded {decision}: check {word} for {shown}" + ("" if a.ok else "; the task is open again"))
+    return 0
+
+
+def _set_config_in_transaction(tx, task, key, text, quote):
+    """Record the decision, then the event: hubtx authorizes a `user` event only against the
+    DECISIONS.md at HEAD.  Returns the decision id."""
+    import hub_events as events
+    import hub_state
+    import hubtx
+    path = hub_state.HUB + "DECISIONS.md"
+    current = (hubtx._blob(tx.root, path) or b"").decode("utf-8", errors="replace")
+    decision = events.next_decision(current)
+    block = "\n".join([
+        "",
+        f"### {decision} · {hubtx.now()} · recorded by [{tx.tag}] · heard in [{tx.tag}]'s chat",
+        "- event time: unknown",
+        f'- quote: "{quote}"',
+        f"- scope: config={key}; value={text}",
+        "- revision: none",
+        "- supersedes: none",
+        "- answers: none",
+    ])
+    tx.append(path, block)
+    tx.commit([path], f"record {decision} (set {key})")
+    line = events.format_event(tx.tag, "user", dict(decision=decision, action="set_config", key=key, value=text),
+                               note=f"user set {key} ({decision})")
+    status = hub_state.status_path(task)
+    tx.append(status, line)
+    tx.commit([status], f"record set_config of {key} ({decision})")
+    return decision
+
+
+def cmd_set_config(repo, a) -> int:
+    import hub_events as events
+    import hub_state
+    import hubtx
+    import task_names
+    try:
+        if os.environ.get("JOB_TAG"):  # the dispatcher sets JOB_TAG in every wake it starts
+            raise Refused("job.py set-config records the user's words and runs only in the user's chat, "
+                          "not inside a job-board wake (JOB_TAG is set)")
+        if a.by not in events.TAGS:
+            raise Refused(f"--by must be one of {sorted(events.TAGS)}")
+        quote = " ".join(str(a.quote).split())  # one line: a quote can never open a new block
+        if not quote:
+            raise Refused("--quote must hold the user's words")
+        if a.key == "_comment" or not a.key.strip():
+            raise Refused("--key must name a setting of hub_config.json")
+        try:
+            value = json.loads(a.value)
+        except ValueError:
+            raise Refused("--value must be JSON: quote a text as '\"hub\"', and write a Boolean as true")
+        try:
+            hubtx._validate_config({a.key: value})
+            task = task_names.canonical(a.task, repo)
+        except (hubtx.BadInput, ValueError) as exc:
+            raise Refused(str(exc))
+        with contextlib.chdir(repo):  # hubtx works on the repository of the current directory
+            with hubtx.transaction(a.by, task) as tx:
+                if hubtx._blob(tx.root, hub_state.status_path(task)) is None:
+                    raise Refused(f"{task} does not exist; create the task that will change the config first")
+                decision = _set_config_in_transaction(tx, task, a.key, json.dumps(value), quote)
+    except Refused as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except hubtx.HubError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return exc.exit_code
+    print(f"recorded {decision}: {a.key} = {json.dumps(value)} on {ja.display_name(repo, task)}. "
+          "The task's owner can now change hub_config.json and submit.")
     return 0
 
 
@@ -300,6 +372,11 @@ def main(argv=None) -> int:
     verdict.add_argument("--ok", dest="ok", action="store_true", help="the user accepts the result")
     verdict.add_argument("--not-ok", dest="ok", action="store_false", help="the user rejects it; the task reopens")
     common(c)
+    sc = sub.add_parser("set-config", help="record the user's decision to change a key of hub_config.json")
+    sc.add_argument("task", help="the task that will make the change, T028 or T-hub-028")
+    sc.add_argument("--key", required=True, help="the setting, for example task_branch")
+    sc.add_argument("--value", required=True, help="its new value as JSON, for example '\"hub\"' or true")
+    common(sc)
     st = sub.add_parser("status", help="show the jobs on the board")
     st.add_argument("--job", metavar="ID", help="show (and, with --json, select) this job")
     st.add_argument("--json", action="store_true")
@@ -310,7 +387,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     repo = ja.find_repo(args.repo)
     return {"start": cmd_start, "end": cmd_end, "resume": cmd_resume, "check": cmd_check,
-            "status": cmd_status, "migrate": cmd_migrate}[args.cmd](repo, args)
+            "set-config": cmd_set_config, "status": cmd_status, "migrate": cmd_migrate}[args.cmd](repo, args)
 
 
 if __name__ == "__main__":

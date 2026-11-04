@@ -240,7 +240,7 @@ def owns(tag, path):
 
 
 def _decision_exists(root, identifier):
-    text = (_blob(root, HUB+"DECISIONS.md") or b"").decode("utf-8")
+    text = events.without_comments((_blob(root, HUB+"DECISIONS.md") or b"").decode("utf-8"))
     blocks = re.findall(r"^###\s+"+re.escape(identifier)+r"\b[^\n]*\n(.*?)(?=^### |\Z)", text, re.M|re.S)
     if len(blocks) != 1:
         return False

@@ -760,6 +760,54 @@ def doctor(repo, args):
 
 # ---------------------------------------------------------------- hello
 
+def error_text(value):
+    """The message in an error value: plain text, an object, or JSON held in text (Codex nests it)."""
+    if isinstance(value, str):
+        try:
+            inner = json.loads(value)
+        except ValueError:
+            return value
+        return error_text(inner) if isinstance(inner, dict) else value
+    if isinstance(value, dict):
+        for key in ("error", "message"):
+            text = error_text(value.get(key))
+            if text:
+                return text
+    return ""
+
+
+def wake_errors(out):
+    """The error messages in a wake's JSON output, oldest first, without repeats.  Codex reports them
+    as events and items, Claude as `is_error` with `result`."""
+    found = []
+    for line in out.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        item = event.get("item") if isinstance(event.get("item"), dict) else {}
+        kind = str(event.get("type"))
+        if event.get("is_error"):
+            text = error_text(event.get("result"))
+        elif item.get("type") == "error":
+            text = error_text(item)
+        elif "error" in kind or "failed" in kind:
+            text = error_text(event)
+        else:
+            continue
+        if text and text not in found:
+            found.append(text)
+    return found
+
+
+def wake_failure(out, err):
+    """Why a wake failed, masked.  Its JSON output comes first: stderr may hold only warnings."""
+    errors = redact("\n".join(text[:300] for text in wake_errors(out)[-3:]))
+    return "\n".join(part for part in (errors, tail(err, 5)) if part) or tail(out, 3) or "no output"
+
+
 def hello(repo, checks, assume_yes):
     print("\nHello: wake each configured agent once with %r (this spends a few tokens)." % HELLO_PROMPT)
     config = json.loads((repo / HUB / "hub_config.json").read_text(encoding="utf-8"))
@@ -783,7 +831,7 @@ def hello(repo, checks, assume_yes):
         if code == 0 and "READY" in out:
             checks.ok("hello: %s answered READY" % tag)
         else:
-            checks.fail("hello: %s did not answer READY (exit %d)" % (tag, code), tail(err, 5) or "no stderr")
+            checks.fail("hello: %s did not answer READY (exit %d)" % (tag, code), wake_failure(out, err))
 
 
 # ---------------------------------------------------------------- local paths of a clone

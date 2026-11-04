@@ -284,5 +284,60 @@ class TestLocalPaths(WizardBase):
         self.assertEqual(json.loads((repo / LOCAL).read_text())["tool_paths"]["other"], "/some/other")
 
 
+class TestHelloReport(WizardBase):
+    NESTED = json.dumps({"type": "error", "status": 400, "error": {"type": "invalid_request_error",
+                                                                  "message": "That model needs a newer Codex."}})
+    CODEX = "\n".join(json.dumps(event) for event in (      # the shape of a real failed `codex exec --json`
+        {"type": "thread.started", "thread_id": "x"},
+        {"type": "item.completed", "item": {"id": "item_0", "type": "error", "message": "Model metadata not found."}},
+        {"type": "turn.started"},
+        {"type": "error", "message": NESTED},
+        {"type": "turn.failed", "error": {"message": NESTED}}))
+    CLAUDE = json.dumps({"type": "result", "subtype": "success", "is_error": True, "result": "No such model."})
+    DSH = "\n".join(json.dumps(event) for event in (
+        {"type": "session", "sessionId": "x"}, {"type": "status", "phase": "start"}, {"type": "final", "text": ""}))
+
+    def test_codex_reports_its_real_error_once_under_a_stderr_warning(self):
+        report = self.wiz.wake_failure(self.CODEX, "Reading additional input from stdin...\n")
+        self.assertEqual(report.count("That model needs a newer Codex."), 1)
+        self.assertIn("Model metadata not found.", report)
+        self.assertIn("Reading additional input", report)
+        self.assertNotIn('"type"', report)
+
+    def test_claude_reports_its_result(self):
+        self.assertIn("No such model.", self.wiz.wake_failure(self.CLAUDE, ""))
+
+    def test_dsh_reports_stderr_when_its_events_hold_no_error(self):
+        self.assertEqual(self.wiz.wake_failure(self.DSH, "dsh: MISSING_CREDENTIAL\n"), "dsh: MISSING_CREDENTIAL")
+
+    def test_plain_output_and_no_output(self):
+        self.assertEqual(self.wiz.wake_failure("something went wrong\n", ""), "something went wrong")
+        self.assertEqual(self.wiz.wake_failure("", ""), "no output")
+
+    def test_a_good_result_is_no_error(self):
+        self.assertEqual(self.wiz.wake_errors(json.dumps({"type": "result", "is_error": False, "result": "Hi"})), [])
+
+    def test_a_list_or_number_on_a_line_is_ignored(self):
+        self.assertEqual(self.wiz.wake_errors("[1, 2]\n3\nnot json\n"), [])
+
+    def test_a_key_in_an_error_is_masked(self):
+        key = "Zk4mP9qR2tV7xB1nC6dF" + "8hJ3Lw5Ys0"
+        report = self.wiz.wake_failure(json.dumps({"type": "error", "message": "rejected api_key: " + key}), "")
+        self.assertIn("rejected", report)
+        self.assertNotIn(key, report)
+
+    def test_a_long_error_is_cut(self):
+        self.assertLess(len(self.wiz.wake_failure(json.dumps({"type": "error", "message": "x " * 5000}), "")), 400)
+
+    def test_hello_shows_the_real_reason(self):
+        repo = self.install()
+        make_tool(self.root / "my tools", "codex",
+                  "#!/bin/sh\nif [ \"$1\" = login ]; then exit 0; fi\ncat <<'EVENTS'\n%s\nEVENTS\n"
+                  "echo 'Reading additional input from stdin...' >&2\nexit 1\n" % self.CODEX)
+        _, out, _ = self.call(str(repo), "--doctor", "--hello", "--yes")
+        self.assertIn("hello: gpt did not answer READY (exit 1)", out)
+        self.assertIn("That model needs a newer Codex.", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -59,7 +59,8 @@ class GitTools(unittest.TestCase):
         self.write(HUB+"tasks/T012.status.md", created()+"\n"+ev.format_event("gpt","claim",dict(scope=scopes),timestamp=STAMP)+"\n")
         self.write(HUB+"tasks/T013.status.md", created("claude",("gpt",),("pkg/foreign.py",))+"\n"+
                    ev.format_event("claude","claim",dict(scope=["pkg/foreign.py","foreign/**"]),timestamp=STAMP)+"\n")
-        for name in ("hubtx.py", "hub_events.py", "hub_append.py", "hub_commit.py", "commit_msg_hook.py", "install_hooks.py"):
+        for name in ("hubtx.py", "hub_events.py", "hub_append.py", "hub_commit.py", "commit_msg_hook.py", "install_hooks.py",
+                     "secret_guard.py"):
             self.write(HUB+"tools/"+name, (HERE/name).read_text())
         self.git("add", "--", *[p.relative_to(self.root).as_posix() for p in self.root.rglob("*") if p.is_file() and ".git" not in p.relative_to(self.root).parts])
         self.git("commit", "-qm", "fixture baseline")

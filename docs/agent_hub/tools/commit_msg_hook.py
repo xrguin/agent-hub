@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Check ownership in Git's candidate index; never acquire another hub lock.
+"""Check secrets and ownership in Git's candidate index; never acquire another hub lock.
 
+The secret check (secret_guard.py) runs first, for every commit in every mode.
 Mode from the committed hub_config.json `commit_guard`: "full" (default) or "scoped"."""
 from pathlib import Path
 import re
 import sys
 import hubtx
+import secret_guard
 
 
 def _policy_config(root):
@@ -19,6 +21,9 @@ def main():
             raise hubtx.BadInput("Expected Git's commit message filename")
         text = Path(sys.argv[1]).read_text(encoding="utf-8")
         root = hubtx.repo_root()
+        found = secret_guard.commit_findings(root, text)
+        if found:
+            raise hubtx.BadInput(secret_guard.refusal(found))
         if _policy_config(root)["commit_guard"] == "scoped":
             tag = hubtx.scoped_tag(text)
             if hubtx.git(root, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:

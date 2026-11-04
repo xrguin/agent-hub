@@ -15,6 +15,8 @@ Your tag: [claude] | [gpt] | [deepseek]. Read docs/agent_hub/README.md and follo
 read STATE.md, DECISIONS.md, open tasks and reviews of your work; claim before editing;
 log to logs/<tag>.md; set tasks to review; review others' tasks by recomputing from raw data;
 never mark your own task done; ask the user before any expensive or irreversible job.
+Never put a key, token, password or login in any file, log, review, task card or commit message,
+and never use git commit --no-verify: the commit guard refuses key-like strings.
 In a job-board wake (prompt "[tag] job-board wake ..."), skip this reading list and read only what the prompt names.
 ```
 

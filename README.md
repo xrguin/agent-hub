@@ -16,7 +16,7 @@ In many agent workflows, the agent that did the work also checks it, and the loo
 6. **Reviews are bound to a revision.** A submit records a hash of the committed deliverables. If a deliverable is committed again after the submit, no reviewer is woken: the task stays in its review state, and the board says the deliverables changed since the submit and that it waits for the owner to submit again. (If an earlier revision still has an accepting quorum, with no blocking finding open, the state reads `review (deliverables changed)`. Under the default `--required all`, that means every reviewer accepted the same earlier revision.) The owner must submit again before a new review starts. Uncommitted edits do not change the hash.
 
 Two more rules:
-- **Commit guard (code).** A git hook rejects an agent's commit if it touches another agent's active claim, log, review or task card, or a `hub_config.json` change that no recorded `user action=set_config` decision allows, or if it rewrites an append-only file. It checks commits, not file edits. An agent can still change those files on disk, and a claim stops guarding its files once its task is accepted or cancelled.
+- **Commit guard (code).** A git hook rejects an agent's commit if it touches another agent's active claim, log, review or task card, or a `hub_config.json` change that no recorded `user action=set_config` decision allows, or if it rewrites an append-only file. It also refuses any commit, yours included, that adds a key-like string or a secret file such as `.env`. It checks commits, not file edits. An agent can still change those files on disk, and a claim stops guarding its files once its task is accepted or cancelled.
 - **Stages (protocol rule).** An accepted task wakes nobody, so a later stage of a task starts only when you say so in chat. No tool checks this. Task cards are written so that a wake does not go on to the next stage.
 
 ### Compared with other setups
@@ -56,7 +56,8 @@ python3 setup_hub.py /path/to/your/repo             # installs, asking before ea
 ```
 
 The wizard:
-- checks your tools and logins and writes `hub_config.json`;
+- finds your tools, on `PATH` or in the usual install places, and checks your logins;
+- writes `hub_config.json` with bare command names, and keeps this machine's full paths in a git-ignored local file;
 - copies `docs/agent_hub/` into your repository;
 - updates `.gitignore`, `CLAUDE.md` and `AGENTS.md`;
 - commits, but never pushes;
@@ -64,7 +65,7 @@ The wizard:
 
 It never asks for or stores an API key. `--doctor` checks an installed hub without changing anything.
 
-Then, in your repository, tell one agent `job start: <your goal>`. [`README_FIRST.md`](README_FIRST.md) covers the manual install, your first job, and what to adapt: the hard rules, the task categories and the agent tags. [`SETUP_WITH_CLAUDE.md`](SETUP_WITH_CLAUDE.md) has a prompt that lets Claude Code run the setup for you.
+Then, in your repository, tell one agent `job start: <your goal>`. [`README_FIRST.md`](README_FIRST.md) covers the manual install, your first job, and what to adapt: the hard rules, the task categories and the agent tags. [`SETUP_WITH_AGENT.md`](SETUP_WITH_AGENT.md) has a prompt that lets Claude Code, Codex or `dsh` run the setup for you.
 
 ## What is in this repository
 
@@ -80,6 +81,7 @@ Then, in your repository, tell one agent `job start: <your goal>`. [`README_FIRS
 ## Limitations
 
 - **The hub is cooperative, not secure.** The commit guard catches mistakes, not bad intent: `git commit --no-verify` skips it, and an agent that leaves its tag out of a commit message is treated as you. A woken agent has write access to the repository, and a headless DeepSeek wake runs shell commands without asking first.
+- **The secret check is a best effort.** It knows common key formats, not every secret, and `git commit --no-verify` skips it. It looks only at text added in new commits; `setup_hub.py --doctor` checks tracked files as they are now, not old history. A woken agent can still read your credential files. For a public repository, also turn on GitHub push protection; `--doctor` warns when it is off.
 - **It is slower and costs more than a single agent.** Every review is another agent run, and a slide review job once used 45.5M input tokens in 22 minutes. The per-job budgets limit the number of wakes. `hub_config.json` has a token budget, but the dispatcher does not measure tokens yet, so that budget never triggers.
 - **A wake has a 30-minute wall.** The dispatcher kills a wake that runs longer, with its whole process group. What follows depends on the task:
   - If the killed agent still holds the task as `claimed` (it had not submitted), the claim is released and the task is Open again. The dispatcher re-wakes an eligible agent for it once per job: the named owner, or for an `open` task any agent that is neither the poster nor a reviewer. A named owner that also posted the task is not woken; it must claim the task again in its own chat. After a second such timeout the task stays Open, nobody is woken for it, and the board lists it under Paused.

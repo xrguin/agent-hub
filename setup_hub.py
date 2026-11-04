@@ -2,6 +2,9 @@
 """Set up the agent hub from the starter kit in your repository (T050).
 
     python3 setup_hub.py REPO [--yes] [--dry-run] [--no-tests] [--hello]   install the hub
+                              [--tool-path TOOL=PATH ...]
+    python3 setup_hub.py REPO --local-paths [--dry-run] [--tool-path ...]  record this machine's tool paths
+                                                       (for a clone that already has the hub)
     python3 setup_hub.py REPO --doctor [--tests] [--hello]                 check an installed hub
     python3 setup_hub.py --fix-deepseek [--yes]                            enable dsh's stored credentials
                                                        (alone; without --yes and a terminal: preview only)
@@ -9,13 +12,17 @@
 The kit folder is the folder of this script.  Python 3.11+, standard library only.  The wizard never
 asks for, reads or stores a password or an API key, and it never pushes.  It writes only inside REPO
 (it refuses symlinked docs, .gitignore, CLAUDE.md, AGENTS.md); --fix-deepseek alone edits one dsh file.
-The output of a failing command is shown with emails and key-like strings masked; that is a best
-effort, not a guarantee.
+A tool not on PATH is looked for in the usual install places.  Full paths go only in the git-ignored
+hub_config.local.json; the committed hub_config.json keeps the bare names, so git shares no machine's
+paths.  The output of a failing command is shown with emails and key-like strings masked; that is a
+best effort, not a guarantee.
 """
 import argparse
+import glob
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -23,7 +30,17 @@ from pathlib import Path
 
 KIT = Path(__file__).resolve().parent
 HUB = "docs/agent_hub"
+LOCAL_CONFIG = HUB + "/hub_config.local.json"     # this machine's tool paths; git-ignored, never committed
 AGENTS = (("claude", "claude"), ("gpt", "codex"), ("deepseek", "dsh"))  # (tag, command)
+DSH_APP = "DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
+TOOL_PLACES = {      # searched in this order when PATH has no such tool; anywhere else needs --tool-path
+    "claude": ("~/.claude/local/claude", "~/.local/bin/claude", "~/.npm-global/bin/claude",
+               "~/.nvm/versions/node/*/bin/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude"),
+    "codex": ("~/.local/bin/codex", "~/.npm-global/bin/codex", "~/.nvm/versions/node/*/bin/codex",
+              "/opt/homebrew/bin/codex", "/usr/local/bin/codex"),
+    "dsh": ("/Applications/" + DSH_APP, "~/Applications/" + DSH_APP, "~/.local/bin/dsh",
+            "/opt/homebrew/bin/dsh", "/usr/local/bin/dsh"),
+}
 DSH_ENTRIES = ("credentials", "authorization", "deepseek-account")
 DSH_COMMENT = ('# Restore stored authentication (dsh-headless README, "Credentials"), '
                'so saved keys apply to headless runs.')
@@ -136,6 +153,42 @@ def step(n, title):
     print("\n[%d/%d] %s" % (n, N_STEPS, title))
 
 
+def find_tool(command, overrides=None):
+    """Full path of a tool: --tool-path first, then PATH, then TOOL_PLACES.  None when it is not found."""
+    if overrides and command in overrides:
+        return overrides[command]
+    path = shutil.which(command)
+    if path:
+        return str(Path(path).absolute())
+    for pattern in TOOL_PLACES.get(command, ()):
+        hits = [p for p in glob.glob(os.path.expanduser(pattern)) if os.path.isfile(p) and os.access(p, os.X_OK)]
+        if hits:
+            return max(hits, key=os.path.getmtime)      # several nvm versions: the newest install
+    return None
+
+
+def local_tool_paths(repo):
+    """{command: full path} from the git-ignored local file, {} without one.  ValueError when it is invalid."""
+    path = repo / LOCAL_CONFIG
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    tools = data.get("tool_paths", {}) if isinstance(data, dict) else None
+    if not isinstance(tools, dict) or not all(isinstance(value, str) for value in tools.values()):
+        raise ValueError("%s needs a tool_paths object of strings" % LOCAL_CONFIG)
+    return tools
+
+
+def write_local_config(repo, tools):
+    """Merge {command: full path} into the local file.  It holds paths only, never a credential."""
+    data = {"_comment": "This machine's tool paths. Git-ignored: do not commit this file. Each key is a command "
+                        "name in hub_config.json job_agents; its value replaces that first word.",
+            "tool_paths": {**local_tool_paths(repo), **tools}}
+    path = repo / LOCAL_CONFIG
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    path.chmod(0o644)
+
+
 def dsh_home():
     return Path(os.environ.get("DSH_HOME") or (Path.home() / ".dsh"))
 
@@ -148,6 +201,13 @@ def patch_path():
 
 ID_LINE = re.compile(r"^(\s*)-\s+id:\s*['\"]?([\w.-]+)['\"]?\s*(#.*)?$")
 DISABLED_LINE = re.compile(r"^(\s+disabled:[ \t]*)([^#]*?)([ \t]*(?:#.*)?)$")   # any value, comment kept
+EMPTY_LIST_LINE = re.compile(r"^\[\s*\]\s*(#.*)?$")   # the body of a fresh dsh patch file
+
+
+def dsh_has_empty_list(lines):
+    """True when a top-level `[]` is present.  YAML rejects it in front of `- id:` entries, so dsh would
+    stop loading the profile; it has to go before any entry is added."""
+    return any(EMPTY_LIST_LINE.match(line) for line in lines)
 
 
 def dsh_scan(lines):
@@ -202,6 +262,8 @@ def dsh_plan(lines):
             plan.append((name, "add disabled: false to the entry"))
         else:
             plan.append((name, "disabled: %s -> disabled: false" % (found[name][1] or "(empty)")))
+    if dsh_has_empty_list(lines):
+        plan.append(("[]", "remove the empty list, which cannot stand in front of entries"))
     return plan
 
 
@@ -223,6 +285,7 @@ def dsh_fixed(lines):
             out[at] = head + "false" + hit.group(3)
     for index, line in sorted(inserts, reverse=True):
         out.insert(index, line)
+    out = [line for line in out if not EMPTY_LIST_LINE.match(line)]
     missing = [name for name in DSH_ENTRIES if name not in found]
     if missing:
         out.append(DSH_COMMENT)
@@ -245,14 +308,18 @@ def dsh_login_ok():
     path = patch_path()
     if not path.is_file():
         return False, "no %s" % path
-    bad = dsh_missing_or_disabled(read_lines(path)[0])
+    lines = read_lines(path)[0]
+    bad = dsh_missing_or_disabled(lines)
+    if not bad and dsh_has_empty_list(lines):
+        return False, "a leftover `[]` in %s stops dsh from loading the profile" % path
     return (not bad), ("missing or not `disabled: false` in the headless profile: %s" % ", ".join(bad) if bad else "")
 
 
 def fix_deepseek(assume_yes):
     path = patch_path()
     if not path.is_file():
-        print("Cannot find %s\nRun `dsh headless --help` once so dsh creates the profile, then try again." % path)
+        print("Cannot find %s\nRun `%s headless --help` once so dsh creates the profile, then try again."
+              % (path, shlex.quote(find_tool("dsh") or "dsh")))
         return 1
     lines, newline = read_lines(path)
     plan = dsh_plan(lines)
@@ -363,16 +430,17 @@ def preflight(repo):
     return branch, dirty
 
 
-def find_agents(checks):
+def find_agents(checks, overrides=None):
     step(2, "Agents")
     found = {}
     for tag, command in AGENTS:
-        path = shutil.which(command)
+        path = find_tool(command, overrides)
         if not path:
-            checks.skip("%s: `%s` not installed (optional)" % (tag, command))
-            print("  – %s: not installed (optional)" % tag)
+            checks.skip("%s: `%s` not found (optional; if it is installed elsewhere, rerun with --tool-path %s=/full/path)"
+                        % (tag, command, command))
+            print("  – %s: not found on PATH or in the usual places (optional)" % tag)
             continue
-        found[tag] = str(Path(path).absolute())
+        found[tag] = path
         check_login(checks, tag, found[tag])
         print("  %s %s: %s" % ("✓" if checks.items[-1][0] == "ok" else "✗", tag, found[tag]))
     return found
@@ -381,21 +449,20 @@ def find_agents(checks):
 def make_config(found, branch):
     step(3, "hub_config.json")
     config = json.loads((KIT / HUB / "hub_config.json").read_text(encoding="utf-8"))
-    agents = {}
-    for tag, argv in config["job_agents"].items():
-        if tag in found:
-            agents[tag] = [found[tag], *argv[1:]]
-    config["job_agents"] = agents
+    config["job_agents"] = {tag: argv for tag, argv in config["job_agents"].items() if tag in found}
     config["task_branch"] = branch
-    print("  agents: %s; task_branch: %s" % (", ".join(agents) or "none", branch))
+    print("  agents: %s; task_branch: %s" % (", ".join(config["job_agents"]) or "none", branch))
     return config
 
 
-def copy_tree(repo, config, dry, assume_yes):
+def copy_tree(repo, config, found, dry, assume_yes):
     step(4, "Copy the hub")
     src, dst = KIT / HUB, repo / HUB
-    files = [p for p in sorted(src.rglob("*")) if p.is_file() and "__pycache__" not in p.parts]
+    files = [p for p in sorted(src.rglob("*"))
+             if p.is_file() and "__pycache__" not in p.parts and p.name != Path(LOCAL_CONFIG).name]
     print("  will create %d files under %s (existing files are never overwritten)" % (len(files), dst))
+    if found:
+        print("  will record this machine's tool paths in %s (git-ignored, never committed)" % (repo / LOCAL_CONFIG))
     if dry:
         return
     if not ask("Copy the hub into your repository?", assume_yes):
@@ -411,6 +478,9 @@ def copy_tree(repo, config, dry, assume_yes):
             target.chmod(0o644)
         else:
             shutil.copy2(path, target)
+    if found:
+        commands = dict(AGENTS)
+        write_local_config(repo, {commands[tag]: path for tag, path in found.items()})
 
 
 def update_gitignore(repo, dry, assume_yes):
@@ -461,7 +531,8 @@ def update_config_files(repo, dry, assume_yes):
 
 def commit(repo, dry, assume_yes, checks, gitignore_dirty=False):
     step(7, "Commit")
-    paths = ["docs/agent_hub"] + ([] if gitignore_dirty else [".gitignore"])
+    has_ignore = dry or (repo / ".gitignore").is_file()      # the .gitignore step can be declined
+    paths = ["docs/agent_hub"] + ([".gitignore"] if has_ignore and not gitignore_dirty else [])
     print("  will run: git add %s && git commit -m 'Add agent hub (setup_hub.py)' (never pushed)" % " ".join(paths))
     if gitignore_dirty:      # T051 F5: never fold the user's own uncommitted edits into the hub commit
         print("  .gitignore is left out: it had uncommitted changes of yours before the install")
@@ -471,6 +542,8 @@ def commit(repo, dry, assume_yes, checks, gitignore_dirty=False):
         checks.fail("hub commit skipped", "git add %s && git commit -m 'Add agent hub'" % " ".join(paths))
         return
     code, _, err = git(repo, "add", *paths)
+    if code == 0:      # also when the .gitignore step was declined: machine paths never enter the commit
+        code, _, err = git(repo, "rm", "-q", "--cached", "--ignore-unmatch", "--", LOCAL_CONFIG)
     if code == 0:
         code, _, err = git(repo, "commit", "-q", "-m", "Add agent hub (setup_hub.py)")
     if code != 0:
@@ -512,6 +585,33 @@ def self_test(repo, checks):
         checks.fail("self-test failed", tail(err or out, 8))
 
 
+def secret_scan(repo, checks):
+    """The guard only sees new commits, so check what is already tracked.  The report holds no value."""
+    tool = repo / HUB / "tools" / "secret_guard.py"
+    if not tool.is_file():
+        checks.fail("the secret guard is missing", "copy docs/agent_hub/tools/secret_guard.py from the kit")
+        return
+    code, out, err = run([sys.executable, "-B", str(tool), "--all"], cwd=repo, timeout=120)
+    if code == 0:
+        checks.ok("no key-like strings in tracked files")
+    else:
+        checks.fail("tracked files may hold a secret", (tail(err or out, 12) or "no message") +
+                    "\nremove it, and replace the key if it was ever pushed")
+
+
+def github_protection(repo, checks):
+    """A warning for a public GitHub repository without push protection.  Silent without `gh` or an answer."""
+    match = re.search(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?$", git(repo, "remote", "get-url", "origin")[1].strip())
+    if not match or not shutil.which("gh"):
+        return
+    code, out, _ = run(["gh", "api", "repos/%s" % match.group(1), "--jq",
+                        '[.visibility, .security_and_analysis.secret_scanning_push_protection.status // ""] | @tsv'],
+                       timeout=20)
+    if code == 0 and out.strip().split("\t") == ["public", "disabled"]:
+        checks.skip("%s is public and GitHub push protection is off (warning); turn it on in the repository's "
+                    "security settings" % match.group(1))
+
+
 def kickoff_prompts(repo, found):
     path = repo / HUB / "KICKOFF_PROMPT.md"
     template = fenced(path.read_text(encoding="utf-8"), "## 1.") if path.is_file() else ""
@@ -530,9 +630,9 @@ def kickoff_prompts(repo, found):
 def install(repo, args):
     checks = Checks()
     branch, gitignore_dirty = preflight(repo)
-    found = find_agents(checks)
+    found = find_agents(checks, args.tools)
     config = make_config(found, branch)
-    copy_tree(repo, config, args.dry_run, args.yes)
+    copy_tree(repo, config, found, args.dry_run, args.yes)
     update_gitignore(repo, args.dry_run, args.yes)
     update_config_files(repo, args.dry_run, args.yes)
     commit(repo, args.dry_run, args.yes, checks, gitignore_dirty)
@@ -547,6 +647,8 @@ def install(repo, args):
         checks.skip("self-test not run (--no-tests)")
     else:
         self_test(repo, checks)
+    secret_scan(repo, checks)
+    github_protection(repo, checks)
     if args.hello:
         hello(repo, checks, args.yes)
     kickoff_prompts(repo, found)
@@ -591,18 +693,32 @@ def doctor(repo, args):
         return 1
     checks.ok("docs/agent_hub exists")
     config = read_config(repo, checks)
+    try:
+        tools = local_tool_paths(repo)
+    except (OSError, ValueError) as exc:
+        tools = {}
+        checks.fail("%s is not valid: %s" % (LOCAL_CONFIG, exc), "fix or delete %s" % (repo / LOCAL_CONFIG))
+    if git(repo, "ls-files", "--error-unmatch", "--", LOCAL_CONFIG)[0] == 0:
+        checks.fail("%s is tracked by git, so this machine's paths are shared" % LOCAL_CONFIG,
+                    "git rm --cached %s, and add it to .gitignore" % LOCAL_CONFIG)
     if config:
         agents = config["job_agents"]
         for tag, argv in agents.items():
-            exe = argv[0] if argv else ""
+            name = argv[0] if argv else ""
+            exe = tools.get(name, name)
             resolved = shutil.which(exe) if exe else None
+            if os.path.isabs(name):
+                checks.skip("%s: hub_config.json holds a full path, which git shares; keep the bare name there and "
+                            "the path in %s (warning)" % (tag, LOCAL_CONFIG))
             if resolved and os.access(resolved, os.X_OK):
                 checks.ok("%s: command %s is executable" % (tag, exe))
                 if tag in dict(AGENTS):
                     check_login(checks, tag, resolved)
             else:
                 checks.fail("%s: command %r not found or not executable" % (tag, exe),
-                            "install it, or edit job_agents in %s/hub_config.json" % HUB)
+                            "install it, or record its path: python3 %s %s --local-paths "
+                            "(add --tool-path %s=/full/path if it is somewhere unusual)"
+                            % (Path(__file__).resolve(), repo, name or "TOOL"))
         branch = config.get("task_branch", "main")
         if git(repo, "rev-parse", "--verify", "-q", "refs/heads/%s" % branch)[0] == 0:
             checks.ok("task_branch %s exists" % branch)
@@ -629,6 +745,8 @@ def doctor(repo, args):
         checks.ok("commit guard installed")
     else:
         checks.fail("commit guard (.git/hooks/commit-msg) is not installed", GUARD_FIX)
+    secret_scan(repo, checks)
+    github_protection(repo, checks)
     if args.tests:
         self_test(repo, checks)
     if args.hello and config:
@@ -648,9 +766,14 @@ def hello(repo, checks, assume_yes):
     if not ask("Wake the agents?", assume_yes):
         checks.skip("hello skipped")
         return
+    try:
+        tools = local_tool_paths(repo)
+    except (OSError, ValueError) as exc:
+        checks.fail("hello not run: %s is not valid: %s" % (LOCAL_CONFIG, exc), "fix or delete %s" % (repo / LOCAL_CONFIG))
+        return
     for tag, argv in config["job_agents"].items():
         cmd = []
-        for item in argv:
+        for item in [tools.get(argv[0], argv[0]), *argv[1:]] if argv else argv:
             for key, value in (("{repo}", str(repo)), ("{prompt}", HELLO_PROMPT), ("{tag}", "hello"),
                                ("{reason}", "hello"), ("{task}", "hello"), ("{revision}", "hello"),
                                ("{job}", "hello")):
@@ -663,7 +786,46 @@ def hello(repo, checks, assume_yes):
             checks.fail("hello: %s did not answer READY (exit %d)" % (tag, code), tail(err, 5) or "no stderr")
 
 
+# ---------------------------------------------------------------- local paths of a clone
+
+def record_local_paths(repo, tools, dry):
+    """A clone that already has the hub: find this machine's tools and record them in the local file."""
+    if not (repo / HUB).is_dir():
+        raise Stop("%s does not exist; install the hub first" % (repo / HUB))
+    if (repo / LOCAL_CONFIG).is_symlink():
+        raise Stop("%s is a symbolic link; the wizard writes only inside %s" % (repo / LOCAL_CONFIG, repo))
+    if git(repo, "check-ignore", "-q", "--no-index", "--", LOCAL_CONFIG)[0] != 0:
+        raise Stop("%s is not git-ignored, so its paths could be committed. Add this line to .gitignore first:\n%s"
+                   % (LOCAL_CONFIG, LOCAL_CONFIG))
+    found = {command: path for _, command in AGENTS for path in [find_tool(command, tools)] if path}
+    for _, command in AGENTS:
+        print("  %s %s: %s" % ("✓" if command in found else "–", command, found.get(command, "not found")))
+    if dry:
+        print("\nDry run: nothing was changed.")
+    elif found:
+        write_local_config(repo, found)
+        print("\nRecorded in %s (git-ignored)." % (repo / LOCAL_CONFIG))
+    else:
+        print("\nNo tool found, so nothing was recorded. Use --tool-path TOOL=/full/path.")
+    return 0
+
+
 # ---------------------------------------------------------------- main
+
+def parse_tool_paths(parser, items):
+    """{command: full path} from the TOOL=PATH values of --tool-path."""
+    commands = [command for _, command in AGENTS]
+    tools = {}
+    for item in items or ():
+        name, sep, value = item.partition("=")
+        if not sep or name not in commands:
+            parser.error("--tool-path needs TOOL=/full/path, with TOOL one of %s (got %r)" % (", ".join(commands), item))
+        path = Path(value).expanduser().absolute()
+        if not path.is_file() or not os.access(path, os.X_OK):
+            parser.error("--tool-path: %s is not an executable file" % path)
+        tools[name] = str(path)
+    return tools
+
 
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
@@ -680,6 +842,10 @@ def main(argv=None):
     parser.add_argument("--no-tests", action="store_true", help="install without the self-test")
     parser.add_argument("--fix-deepseek", action="store_true", help="enable dsh's stored credentials for headless runs")
     parser.add_argument("--hello", action="store_true", help="wake each configured agent once (spends a few tokens)")
+    parser.add_argument("--tool-path", action="append", metavar="TOOL=PATH",
+                        help="use this file for claude, codex or dsh (repeatable; for a tool the search misses)")
+    parser.add_argument("--local-paths", action="store_true",
+                        help="record this machine's tool paths in a clone that already has the hub")
     args = parser.parse_args(argv)
     if sys.version_info < (3, 11):
         print("error: Python 3.11 or newer is needed", file=sys.stderr)
@@ -687,22 +853,33 @@ def main(argv=None):
     if args.fix_deepseek:      # T051 F1: checked before anything is read or written
         clash = [flag for flag, on in (("REPO", args.repo), ("--dry-run", args.dry_run), ("--doctor", args.doctor),
                                        ("--tests", args.tests), ("--no-tests", args.no_tests),
-                                       ("--hello", args.hello)) if on]
+                                       ("--hello", args.hello), ("--tool-path", args.tool_path),
+                                       ("--local-paths", args.local_paths)) if on]
         if clash:
             parser.error("--fix-deepseek runs on its own; it cannot be combined with %s. "
                          "Run `setup_hub.py --fix-deepseek` alone; it shows the planned change and asks first"
                          % ", ".join(clash))
     elif not args.repo:
         parser.error("REPO is required (except with --fix-deepseek)")
+    if args.doctor and args.tool_path:
+        parser.error("--doctor changes nothing, so it takes no --tool-path; use --local-paths to record a path")
+    if args.local_paths:
+        clash = [flag for flag, on in (("--doctor", args.doctor), ("--tests", args.tests), ("--no-tests", args.no_tests),
+                                       ("--hello", args.hello)) if on]
+        if clash:
+            parser.error("--local-paths cannot be combined with %s" % ", ".join(clash))
+    args.tools = parse_tool_paths(parser, args.tool_path)
 
     if args.fix_deepseek:      # without --yes and a terminal it prints the plan and changes nothing
         return fix_deepseek(args.yes)
-    prompts = (not args.doctor and not args.dry_run) or (args.hello and not args.dry_run)
+    prompts = (not args.doctor and not args.dry_run and not args.local_paths) or (args.hello and not args.dry_run)
     if prompts and not args.yes and not sys.stdin.isatty():
         print("rerun with --yes (or run it in a terminal)")
         return 2
     repo = Path(args.repo).expanduser().resolve()
     try:
+        if args.local_paths:
+            return record_local_paths(repo, args.tools, args.dry_run)
         if args.doctor:
             if not repo.is_dir():
                 raise Stop("%s is not a folder" % repo)

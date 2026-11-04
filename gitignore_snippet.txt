@@ -1,4 +1,5 @@
-# agent hub runtime files (job board)
+# agent hub runtime files (job board) and this machine's tool paths
+docs/agent_hub/hub_config.local.json
 docs/agent_hub/JOB.json
 docs/agent_hub/.job_state.json
 docs/agent_hub/BOARD.md
@@ -6,3 +7,9 @@ docs/agent_hub/.dispatcher.lock
 docs/agent_hub/logs/dispatcher.jsonl
 docs/agent_hub/logs/dispatcher_runs/
 docs/agent_hub/.job_fixture/
+# secret files: never commit these
+.env
+.env.*
+!.env.example
+*.pem
+.credentials*

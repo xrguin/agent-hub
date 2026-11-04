@@ -59,9 +59,10 @@ With hub_config `commit_guard` set to `"scoped"`, the `commit-msg` hook checks e
 - For agent commits only: each status event must be authorized for the committing tag, and the commit may not touch a path inside another agent's active claim, another agent's log or review, or hub_config.json without the user's `set_config` decision. A claim stops guarding its files once its task is accepted or cancelled.
 - A merge commit gets the checks of a user commit, whatever its subject: it brings in work already committed on its branch, including other agents' events.
 - For agent commits only: a task card may be changed only by the task's owner or its creator.
+- For everyone, in every `commit_guard` mode: a commit is refused if it adds a key-like string, in a file or in its message, or a secret file such as `.env` or `*.pem`, or `hub_config.local.json`. The refusal names the file, the line and the kind of secret, never the value. For a false alarm, add `secret-guard: allow` to that line. `python3 docs/agent_hub/tools/secret_guard.py --all` checks every tracked file. Never paste a key into a log, review, task card or chat.
 - Everything else (code, data, docs, slides) is allowed.
 
-The user can bypass the guard with `git commit --no-verify`. The guard is cooperative: an agent that leaves out its tag is treated as the user. Install it once per clone with `python3 docs/agent_hub/tools/install_hooks.py --tag <tag> --task <task>`. The hook lives in the common git directory, so it covers linked worktrees, and it runs the main checkout's `commit_msg_hook.py`.
+The user can bypass the guard with `git commit --no-verify`; an agent must not. The guard is cooperative: an agent that leaves out its tag is treated as the user. Install it once per clone with `python3 docs/agent_hub/tools/install_hooks.py --tag <tag> --task <task>`. The hook lives in the common git directory, so it covers linked worktrees, and it runs the main checkout's `commit_msg_hook.py`.
 
 ## 4. Task lifecycle
 
@@ -201,4 +202,4 @@ If your sandbox cannot leave a background process running, run only `job.py star
 - An auto-end job (`job.py start ... --auto-end`, T052) ends by itself once it has at least one task and every task is accepted or cancelled and none of its wakes is running. A paused job never auto-ends. The user's OK / not OK on each task stays the user's: `job.py check` still works on ended jobs.
 - The token limit is not enforced yet, because `parse_tokens` is a stub.
 
-Wake commands are in `hub_config.json`. Each wake's output is saved in `logs/dispatcher_runs/`, and every line of `logs/dispatcher.jsonl` names its job.
+Wake commands are in `hub_config.json`, with bare command names. This machine's full paths are in the git-ignored `hub_config.local.json`; never commit them. Each wake's output is saved in `logs/dispatcher_runs/`, and every line of `logs/dispatcher.jsonl` names its job.

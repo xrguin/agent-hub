@@ -89,6 +89,10 @@ def config_path(repo) -> Path:
     return hub_dir(repo) / "hub_config.json"
 
 
+def local_config_path(repo) -> Path:
+    return hub_dir(repo) / "hub_config.local.json"
+
+
 def board_path(repo) -> Path:
     return hub_dir(repo) / "BOARD.md"
 
@@ -334,10 +338,25 @@ def migrate(repo) -> bool:
     return changed
 
 
+def local_tool_paths(repo) -> dict:
+    """{command: full path} of this machine, from the git-ignored hub_config.local.json."""
+    local = read_json(local_config_path(repo), {})
+    tools = local.get("tool_paths", {}) if isinstance(local, dict) else None
+    if not isinstance(tools, dict) or not all(isinstance(path, str) for path in tools.values()):
+        raise ValueError(f"{local_config_path(repo)} must hold an object with a tool_paths object of strings")
+    return tools
+
+
 def load_config(repo) -> dict:
+    """hub_config.json, with each wake command's first word replaced by this machine's path for it."""
     cfg = read_json(config_path(repo), {})
     if not isinstance(cfg, dict):
         raise ValueError(f"{config_path(repo)} must hold a JSON object")
+    tools = local_tool_paths(repo)
+    agents = cfg.get("job_agents")
+    if tools and isinstance(agents, dict):
+        cfg["job_agents"] = {tag: [tools.get(argv[0], argv[0]), *argv[1:]] if isinstance(argv, list) and argv else argv
+                             for tag, argv in agents.items()}
     return cfg
 
 

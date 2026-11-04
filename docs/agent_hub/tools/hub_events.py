@@ -37,6 +37,17 @@ FIELDS = {
     "user": {"decision", "action"},
 }
 OPTIONAL_CREATED = frozenset(("job",))
+def without_comments(text):
+    """Text without HTML comments: an example block in the DECISIONS.md template is no decision."""
+    return re.sub(r"<!--.*?-->", "", text, flags=re.S)
+
+
+def next_decision(text):
+    """The next free D### id of a DECISIONS.md text."""
+    numbers = [int(n) for n in re.findall(r"^###\s+D(\d{3,})\b", without_comments(text), re.M)]
+    return "D%03d" % (max(numbers, default=0) + 1)
+
+
 USER_FIELDS = {
     "open": {"task"}, "cancel": {"task"},
     "accept_limitation": {"finding"}, "resolve_dispute": {"task", "to"},

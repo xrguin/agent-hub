@@ -2,7 +2,7 @@
 """Set up the agent hub from the starter kit in your repository (T050).
 
     python3 setup_hub.py REPO [--yes] [--dry-run] [--no-tests] [--hello]   install the hub
-                              [--tool-path TOOL=PATH ...]
+                              [--tool-path TOOL=PATH ...] [--hub-branch NAME]
     python3 setup_hub.py REPO --local-paths [--dry-run] [--tool-path ...]  record this machine's tool paths
                                                        (for a clone that already has the hub)
     python3 setup_hub.py REPO --doctor [--tests] [--hello]                 check an installed hub
@@ -54,6 +54,7 @@ FIX_LOGIN = {
                 "then run setup_hub.py --fix-deepseek",
 }
 GUARD_FIX = "python3 docs/agent_hub/tools/install_hooks.py --tag claude --task T000"
+PUSH_FIX = "python3 docs/agent_hub/tools/install_hooks.py --push-block --tag claude --task T000"
 WRITTEN = ("docs", HUB, ".gitignore", "CLAUDE.md", "AGENTS.md")   # every path the install writes to or under
 N_STEPS = 9
 
@@ -398,7 +399,7 @@ def snippet_lines():
 
 # ---------------------------------------------------------------- install steps
 
-def preflight(repo):
+def preflight(repo, hub_branch=None):
     step(1, "Preflight")
     if sys.version_info < (3, 11):
         raise Stop("Python 3.11 or newer is needed (this is %d.%d)" % sys.version_info[:2])
@@ -422,6 +423,10 @@ def preflight(repo):
     if code != 0 or not out.strip():
         raise Stop("HEAD is detached; check out your default branch first")
     branch = out.strip()
+    if hub_branch and git(repo, "check-ref-format", "--branch", hub_branch)[0] != 0:
+        raise Stop("%r is not a valid branch name" % hub_branch)
+    if hub_branch and git(repo, "rev-parse", "--verify", "-q", "refs/heads/%s" % hub_branch)[0] == 0:
+        raise Stop("branch %s already exists; name another with --hub-branch" % hub_branch)
     print("  ok: Python %d.%d, git, work tree %s, nothing staged, branch %s" % (*sys.version_info[:2], repo, branch))
     dirty = bool(git(repo, "status", "--porcelain", "--", ".gitignore")[1].strip())
     if dirty:
@@ -529,19 +534,25 @@ def update_config_files(repo, dry, assume_yes):
     print("  These two files are not added to git (they may be git-ignored). Commit them if you want.")
 
 
-def commit(repo, dry, assume_yes, checks, gitignore_dirty=False):
+def commit(repo, dry, assume_yes, checks, gitignore_dirty=False, hub_branch=None):
     step(7, "Commit")
     has_ignore = dry or (repo / ".gitignore").is_file()      # the .gitignore step can be declined
     paths = ["docs/agent_hub"] + ([".gitignore"] if has_ignore and not gitignore_dirty else [])
-    print("  will run: git add %s && git commit -m 'Add agent hub (setup_hub.py)' (never pushed)" % " ".join(paths))
+    switch = "git switch -c %s && " % hub_branch if hub_branch else ""
+    print("  will run: %sgit add %s && git commit -m 'Add agent hub (setup_hub.py)' (never pushed)"
+          % (switch, " ".join(paths)))
     if gitignore_dirty:      # T051 F5: never fold the user's own uncommitted edits into the hub commit
         print("  .gitignore is left out: it had uncommitted changes of yours before the install")
     if dry:
         return
     if not ask("Commit the hub?", assume_yes):
-        checks.fail("hub commit skipped", "git add %s && git commit -m 'Add agent hub'" % " ".join(paths))
+        checks.fail("hub commit skipped", "%sgit add %s && git commit -m 'Add agent hub'" % (switch, " ".join(paths)))
         return
-    code, _, err = git(repo, "add", *paths)
+    code, err = 0, ""
+    if hub_branch:
+        code, _, err = git(repo, "switch", "-q", "-c", hub_branch)
+    if code == 0:
+        code, _, err = git(repo, "add", *paths)
     if code == 0:      # also when the .gitignore step was declined: machine paths never enter the commit
         code, _, err = git(repo, "rm", "-q", "--cached", "--ignore-unmatch", "--", LOCAL_CONFIG)
     if code == 0:
@@ -556,13 +567,17 @@ def commit(repo, dry, assume_yes, checks, gitignore_dirty=False):
         checks.skip(".gitignore not committed: it had uncommitted changes of yours; review and commit it yourself")
 
 
-def install_guard(repo, dry, assume_yes, checks):
+def install_guard(repo, dry, assume_yes, checks, push_block=False):
     step(8, "Commit guard")
     print("  will run: %s" % GUARD_FIX)
+    if push_block:
+        print("  will run: %s" % PUSH_FIX)
     if dry:
         return
     if not ask("Install the commit guard?", assume_yes):
         checks.fail("commit guard not installed", GUARD_FIX)
+        if push_block:
+            checks.fail("push block not installed", PUSH_FIX)
         return
     code, out, err = run([sys.executable, "docs/agent_hub/tools/install_hooks.py", "--tag", "claude", "--task", "T000"],
                          cwd=repo)
@@ -571,6 +586,14 @@ def install_guard(repo, dry, assume_yes, checks):
     else:
         checks.fail("commit guard not installed: %s" % (tail(err or out, 3).replace("\n", " ") or "failed"),
                     "resolve the message above, then run: " + GUARD_FIX)
+    if push_block:
+        code, out, err = run([sys.executable, "docs/agent_hub/tools/install_hooks.py", "--push-block",
+                              "--tag", "claude", "--task", "T000"], cwd=repo)
+        if code == 0:
+            checks.ok("push block installed")
+        else:
+            checks.fail("push block not installed: %s" % (tail(err or out, 3).replace("\n", " ") or "failed"),
+                        "resolve the message above, then run: " + PUSH_FIX)
 
 
 def self_test(repo, checks):
@@ -599,17 +622,45 @@ def secret_scan(repo, checks):
                     "\nremove it, and replace the key if it was ever pushed")
 
 
-def github_protection(repo, checks):
-    """A warning for a public GitHub repository without push protection.  Silent without `gh` or an answer."""
+def github_status(repo):
+    """(owner/name, visibility, push protection status) of `origin`; None without `gh` or an answer."""
     match = re.search(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?$", git(repo, "remote", "get-url", "origin")[1].strip())
     if not match or not shutil.which("gh"):
-        return
+        return None
     code, out, _ = run(["gh", "api", "repos/%s" % match.group(1), "--jq",
                         '[.visibility, .security_and_analysis.secret_scanning_push_protection.status // ""] | @tsv'],
                        timeout=20)
-    if code == 0 and out.strip().split("\t") == ["public", "disabled"]:
+    fields = out.rstrip("\n").split("\t")
+    return (match.group(1), fields[0], fields[1] if len(fields) > 1 else "") if code == 0 and fields[0] else None
+
+
+def hook_text(repo, name):
+    """The text of a git hook, "" without one."""
+    common = git(repo, "rev-parse", "--git-common-dir")[1].strip()
+    hook = repo / common / "hooks" / name if common else None
+    return hook.read_text(encoding="utf-8", errors="replace") if hook and hook.is_file() else ""
+
+
+def github_protection(repo, checks):
+    """Warnings for a public GitHub repository.  Silent without `gh` or an answer."""
+    info = github_status(repo)
+    if not info or info[1] != "public":
+        return
+    if info[2] == "disabled":
         checks.skip("%s is public and GitHub push protection is off (warning); turn it on in the repository's "
-                    "security settings" % match.group(1))
+                    "security settings" % info[0])
+    if "docs/agent_hub" not in hook_text(repo, "pre-push"):
+        checks.skip("%s is public and has no push block, so a push can publish hub files (warning); "
+                    "see README_FIRST.md, section 8" % info[0])
+
+
+def public_note(repo, branch):
+    """Said before anything is written, so the user can still choose --hub-branch."""
+    info = github_status(repo)
+    if info and info[1] == "public":
+        print("  note: %s is public and the hub would commit on %s, so a later push would publish its logs, "
+              "reviews and your\n  decisions. --hub-branch hub keeps them off GitHub (README_FIRST.md, section 8)."
+              % (info[0], branch))
 
 
 def kickoff_prompts(repo, found):
@@ -629,14 +680,16 @@ def kickoff_prompts(repo, found):
 
 def install(repo, args):
     checks = Checks()
-    branch, gitignore_dirty = preflight(repo)
+    branch, gitignore_dirty = preflight(repo, args.hub_branch)
     found = find_agents(checks, args.tools)
-    config = make_config(found, branch)
+    if not args.hub_branch:
+        public_note(repo, branch)
+    config = make_config(found, args.hub_branch or branch)
     copy_tree(repo, config, found, args.dry_run, args.yes)
     update_gitignore(repo, args.dry_run, args.yes)
     update_config_files(repo, args.dry_run, args.yes)
-    commit(repo, args.dry_run, args.yes, checks, gitignore_dirty)
-    install_guard(repo, args.dry_run, args.yes, checks)
+    commit(repo, args.dry_run, args.yes, checks, gitignore_dirty, args.hub_branch)
+    install_guard(repo, args.dry_run, args.yes, checks, push_block=bool(args.hub_branch))
     step(9, "Self-test and kickoff prompts")
     if args.dry_run:
         print("  would run the self-test%s and print the kickoff prompt for: %s"
@@ -651,6 +704,10 @@ def install(repo, args):
     github_protection(repo, checks)
     if args.hello:
         hello(repo, checks, args.yes)
+    if args.hub_branch:
+        print("\nHub work stays on %s; %s has no hub files. To publish, make a second folder once:\n"
+              "  git worktree add ../%s-publish %s\nREADME_FIRST.md, section 8, has the steps."
+              % (args.hub_branch, branch, repo.name, branch))
     kickoff_prompts(repo, found)
     checks.show()
     return 1 if checks.failed() else 0
@@ -739,9 +796,7 @@ def doctor(repo, args):
             checks.ok("%s has the hub block" % name)
         else:
             checks.skip("%s has no hub block (warning; agents may not read the hub)" % name)
-    common = git(repo, "rev-parse", "--git-common-dir")[1].strip()
-    hook = (repo / common / "hooks" / "commit-msg") if common else None
-    if hook and hook.is_file() and "commit_msg_hook" in hook.read_text(encoding="utf-8", errors="replace"):
+    if "commit_msg_hook" in hook_text(repo, "commit-msg"):
         checks.ok("commit guard installed")
     else:
         checks.fail("commit guard (.git/hooks/commit-msg) is not installed", GUARD_FIX)
@@ -894,6 +949,8 @@ def main(argv=None):
                         help="use this file for claude, codex or dsh (repeatable; for a tool the search misses)")
     parser.add_argument("--local-paths", action="store_true",
                         help="record this machine's tool paths in a clone that already has the hub")
+    parser.add_argument("--hub-branch", metavar="NAME",
+                        help="for a public repository: keep hub work on this new branch, and refuse pushes of hub files")
     args = parser.parse_args(argv)
     if sys.version_info < (3, 11):
         print("error: Python 3.11 or newer is needed", file=sys.stderr)
@@ -902,7 +959,7 @@ def main(argv=None):
         clash = [flag for flag, on in (("REPO", args.repo), ("--dry-run", args.dry_run), ("--doctor", args.doctor),
                                        ("--tests", args.tests), ("--no-tests", args.no_tests),
                                        ("--hello", args.hello), ("--tool-path", args.tool_path),
-                                       ("--local-paths", args.local_paths)) if on]
+                                       ("--local-paths", args.local_paths), ("--hub-branch", args.hub_branch)) if on]
         if clash:
             parser.error("--fix-deepseek runs on its own; it cannot be combined with %s. "
                          "Run `setup_hub.py --fix-deepseek` alone; it shows the planned change and asks first"
@@ -911,6 +968,8 @@ def main(argv=None):
         parser.error("REPO is required (except with --fix-deepseek)")
     if args.doctor and args.tool_path:
         parser.error("--doctor changes nothing, so it takes no --tool-path; use --local-paths to record a path")
+    if args.hub_branch and (args.doctor or args.local_paths):
+        parser.error("--hub-branch belongs to an install; README_FIRST.md, section 8, covers an installed hub")
     if args.local_paths:
         clash = [flag for flag, on in (("--doctor", args.doctor), ("--tests", args.tests), ("--no-tests", args.no_tests),
                                        ("--hello", args.hello)) if on]

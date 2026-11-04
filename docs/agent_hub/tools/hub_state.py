@@ -570,7 +570,7 @@ def _last_tag_commit(repo, tag):
 
 
 def _decision_recorded(repo, identifier):
-    text = read_text(Path(repo) / HUB / "DECISIONS.md")
+    text = events.without_comments(read_text(Path(repo) / HUB / "DECISIONS.md"))
     return bool(re.search(r"^###\s+" + re.escape(identifier) + r"\b", text, re.M))
 
 

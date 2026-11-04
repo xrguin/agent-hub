@@ -9,7 +9,9 @@ Your shell tool may have no terminal, so the wizard cannot ask questions itself:
 
 1. First run `python3 <KIT_PATH>/setup_hub.py <REPO> --dry-run` (a fresh repository) or `--doctor`
    (a repository that already has docs/agent_hub). Explain the output to me in my own language:
-   what would change, which agents it found, and which logins are missing.
+   what would change, which agents it found, and which logins are missing. If it says the repository is
+   public, explain that a later push would publish the hub's logs, reviews and my decisions, and ask me
+   whether to add `--hub-branch hub`, which keeps them off GitHub.
 2. The wizard looks for claude, codex and dsh on PATH and in the usual install places. If it reports a tool
    as not found, look for it yourself before you call it missing: try `command -v <tool>` in my login shell
    (for example `zsh -lic` or `bash -lic`), then application folders, version managers and package manager
